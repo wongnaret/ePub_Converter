@@ -77,6 +77,7 @@ def upload_file():
             'pdf_path': filename,
             'settings': {
                 'page_size': 'kindle', # Default
+                'global_skip_areas': [], # Store skip areas applied to all pages
                 'page_configs': {} # e.g., {'1': {'type': 'front_cover'}, '5': {'images': [{'x':0,'y':0,'w':100,'h':100}]}}
             },
             'status': 'new' # new, processing, done

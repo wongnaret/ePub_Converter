@@ -12,6 +12,7 @@
         body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; overflow: hidden; }
         #sidebar { width: 350px; background: #f8f9fa; padding: 1.5rem; box-sizing: border-box; overflow-y: auto; border-right: 1px solid #ddd; }
         #main-content { flex-grow: 1; display: flex; flex-direction: column; background: #e9ecef; }
+        #right-sidebar { width: 250px; background: #f8f9fa; padding: 1.5rem; box-sizing: border-box; overflow-y: auto; border-left: 1px solid #ddd; }
 
         .controls-top { padding: 10px; background: #fff; border-bottom: 1px solid #ccc; display: flex; align-items: center; gap: 15px; justify-content: center; }
         .controls-top button { padding: 5px 15px; cursor: pointer; }
@@ -42,7 +43,7 @@
             left: 0;
         }
 
-        h2 { font-size: 1.2rem; margin-top: 0; margin-bottom: 15px; word-wrap: break-word; }
+        h2, h3 { font-size: 1.2rem; margin-top: 0; margin-bottom: 15px; word-wrap: break-word; }
         hr { border: 0; border-top: 1px solid #ccc; margin: 15px 0; }
 
         .form-group { margin-bottom: 15px; }
@@ -80,6 +81,11 @@
             color: #555;
             display: none;
         }
+
+        #chapter-nav-list { list-style: none; padding: 0; }
+        #chapter-nav-list li a { display: block; padding: 8px; text-decoration: none; color: #007bff; border-radius: 4px; }
+        #chapter-nav-list li a:hover { background-color: #e9ecef; }
+        #chapter-nav-list li a.active { background-color: #007bff; color: white; }
     </style>
 </head>
 <body>
@@ -119,8 +125,10 @@
         <p style="font-size: 0.9em; color: #666;">Draw boxes to specify how the area should be processed.</p>
 
         <button class="tool-btn active" id="tool-select">Select / Move</button>
-        <button class="tool-btn" id="tool-draw-skip" style="border-color: #dc3545; color: #dc3545;">Draw Skip Area (Red)</button>
-        <button class="tool-btn" id="tool-draw-image" style="border-color: #28a745; color: #28a745;">Draw Image Area (Green)</button>
+        <button class="tool-btn" id="tool-draw-skip" style="border-color: #dc3545; color: #dc3545;">Draw Skip Area (Red, Current Page)</button>
+        <button class="tool-btn" id="tool-draw-global-skip" style="border-color: #dc3545; color: #dc3545; border-style: dashed;">Draw Skip Area (Red, All Pages)</button>
+        <button class="tool-btn" id="tool-draw-image" style="border-color: #28a745; color: #28a745;">Draw Image Area (Green, Current Page)</button>
+        <button class="tool-btn" id="tool-draw-chapter" style="border-color: #17a2b8; color: #17a2b8;">Mark Chapter Start (Blue, Current Page)</button>
         <button class="tool-btn danger" id="delete-selected-btn" style="margin-top: 20px;">Delete Selected Box</button>
 
         <hr>
@@ -154,13 +162,21 @@
         </div>
     </div>
 
+    <div id="right-sidebar">
+        <h3>Chapters</h3>
+        <ul id="chapter-nav-list">
+            <!-- Chapter links will be dynamically inserted here -->
+        </ul>
+    </div>
+
     <script>
         const projectId = "{{ project.id }}";
         const pdfUrl = "{{ url_for('serve_pdf', project_id=project.id) }}";
 
         // Initial Project Data from Backend
-        let projectSettings = {{ project.settings | tojson | safe }} || { page_size: 'kindle', page_configs: {} };
+        let projectSettings = {{ project.settings | tojson | safe }} || { page_size: 'kindle', global_skip_areas: [], page_configs: {} };
         if (!projectSettings.page_configs) projectSettings.page_configs = {};
+        if (!projectSettings.global_skip_areas) projectSettings.global_skip_areas = [];
 
         // PDF.js setup
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
@@ -177,7 +193,7 @@
 
         // Fabric.js setup
         let fCanvas = new fabric.Canvas('fabric-canvas');
-        let currentTool = 'select'; // select, draw_skip, draw_image
+        let currentTool = 'select'; // select, draw_skip, draw_global_skip, draw_image, draw_chapter
         let isDrawing = false;
         let rect, origX, origY;
 
@@ -188,6 +204,7 @@
         const loadingMsg = document.getElementById('loading-msg');
         const zoomValEl = document.getElementById('zoom-val');
         const projectNameInput = document.getElementById('project-name');
+        const chapterNavList = document.getElementById('chapter-nav-list');
 
         const cbFrontCover = document.getElementById('mark-front-cover');
         const cbFullImage = document.getElementById('mark-full-image');
@@ -195,12 +212,21 @@
         // Tool Buttons
         const toolSelect = document.getElementById('tool-select');
         const toolSkip = document.getElementById('tool-draw-skip');
+        const toolGlobalSkip = document.getElementById('tool-draw-global-skip');
         const toolImage = document.getElementById('tool-draw-image');
+        const toolChapter = document.getElementById('tool-draw-chapter');
 
         function setActiveTool(tool, element) {
             currentTool = tool;
-            [toolSelect, toolSkip, toolImage].forEach(el => el.classList.remove('active'));
+            [toolSelect, toolSkip, toolGlobalSkip, toolImage, toolChapter].forEach(el => el.classList.remove('active'));
             element.classList.add('active');
+
+            // Reset button styles
+            toolSkip.style.backgroundColor = ''; toolSkip.style.color = '#dc3545';
+            toolGlobalSkip.style.backgroundColor = ''; toolGlobalSkip.style.color = '#dc3545';
+            toolImage.style.backgroundColor = ''; toolImage.style.color = '#28a745';
+            toolChapter.style.backgroundColor = ''; toolChapter.style.color = '#17a2b8';
+
 
             if (tool === 'select') {
                 fCanvas.isDrawingMode = false;
@@ -214,30 +240,37 @@
                 fCanvas.isDrawingMode = false; // We use custom mouse events for drawing rects
                 fCanvas.selection = false;
                 fCanvas.forEachObject(function(o) {
-                    o.set('selectable', false);
-                    o.set('evented', false);
+                    // Only make global skip boxes unselectable if not in global skip drawing mode
+                    if (o.typeId === 'global_skip' && tool !== 'draw_global_skip') {
+                        o.set('selectable', false);
+                        o.set('evented', false);
+                    } else {
+                        o.set('selectable', false);
+                        o.set('evented', false);
+                    }
                 });
                 fCanvas.discardActiveObject();
                 fCanvas.requestRenderAll();
                 fCanvas.defaultCursor = 'crosshair';
+
+                // Highlight active drawing tool
+                if (tool === 'draw_skip') {
+                    toolSkip.style.backgroundColor = '#dc3545'; toolSkip.style.color = '#fff';
+                } else if (tool === 'draw_global_skip') {
+                    toolGlobalSkip.style.backgroundColor = '#dc3545'; toolGlobalSkip.style.color = '#fff';
+                } else if (tool === 'draw_image') {
+                    toolImage.style.backgroundColor = '#28a745'; toolImage.style.color = '#fff';
+                } else if (tool === 'draw_chapter') {
+                    toolChapter.style.backgroundColor = '#17a2b8'; toolChapter.style.color = '#fff';
+                }
             }
         }
 
         toolSelect.addEventListener('click', () => setActiveTool('select', toolSelect));
-        toolSkip.addEventListener('click', () => {
-            setActiveTool('draw_skip', toolSkip);
-            toolSkip.style.backgroundColor = '#dc3545';
-            toolSkip.style.color = '#fff';
-            toolImage.style.backgroundColor = '';
-            toolImage.style.color = '#28a745';
-        });
-        toolImage.addEventListener('click', () => {
-            setActiveTool('draw_image', toolImage);
-            toolImage.style.backgroundColor = '#28a745';
-            toolImage.style.color = '#fff';
-            toolSkip.style.backgroundColor = '';
-            toolSkip.style.color = '#dc3545';
-        });
+        toolSkip.addEventListener('click', () => setActiveTool('draw_skip', toolSkip));
+        toolGlobalSkip.addEventListener('click', () => setActiveTool('draw_global_skip', toolGlobalSkip));
+        toolImage.addEventListener('click', () => setActiveTool('draw_image', toolImage));
+        toolChapter.addEventListener('click', () => setActiveTool('draw_chapter', toolChapter));
 
         // Fabric.js Mouse Events for Drawing Rectangles
         fCanvas.on('mouse:down', function(o){
@@ -248,9 +281,24 @@
             origX = pointer.x;
             origY = pointer.y;
 
-            let color = currentTool === 'draw_skip' ? 'rgba(220, 53, 69, 0.3)' : 'rgba(40, 167, 69, 0.3)';
-            let strokeColor = currentTool === 'draw_skip' ? 'red' : 'green';
-            let typeId = currentTool === 'draw_skip' ? 'skip' : 'image';
+            let color, strokeColor, typeId;
+            if (currentTool === 'draw_skip') {
+                color = 'rgba(220, 53, 69, 0.3)';
+                strokeColor = 'red';
+                typeId = 'skip';
+            } else if (currentTool === 'draw_global_skip') {
+                color = 'rgba(220, 53, 69, 0.15)'; // Lighter red for global
+                strokeColor = 'red';
+                typeId = 'global_skip';
+            } else if (currentTool === 'draw_image') {
+                color = 'rgba(40, 167, 69, 0.3)';
+                strokeColor = 'green';
+                typeId = 'image';
+            } else if (currentTool === 'draw_chapter') {
+                color = 'rgba(23, 162, 184, 0.3)'; // Cyan/Blue
+                strokeColor = '#17a2b8';
+                typeId = 'chapter_start';
+            }
 
             rect = new fabric.Rect({
                 left: origX,
@@ -265,7 +313,9 @@
                 strokeWidth: 2,
                 transparentCorners: false,
                 hasRotatingPoint: false,
-                typeId: typeId // Custom property to identify the box type
+                typeId: typeId, // Custom property to identify the box type
+                selectable: true, // Always selectable when drawn
+                evented: true
             });
 
             fCanvas.add(rect);
@@ -279,7 +329,7 @@
                 rect.set({ left: Math.abs(pointer.x) });
             }
             if(origY > pointer.y){
-                rect.set({ top: Math.abs(pointer.y) });
+                rect.set({ top: Math.abs(origY - pointer.y) > 0 ? pointer.y : origY }); // Fix for negative height
             }
 
             rect.set({ width: Math.abs(origX - pointer.x) });
@@ -295,45 +345,59 @@
                 // Remove accidental tiny clicks
                 fCanvas.remove(rect);
             }
-            saveCurrentPageData(); // Auto-save locally when drawing is done
+            saveAllBoxData(); // Save all boxes (page-specific and global)
         });
 
         // Modification events
-        fCanvas.on('object:modified', function(e) { saveCurrentPageData(); });
+        fCanvas.on('object:modified', function(e) { saveAllBoxData(); });
 
         document.getElementById('delete-selected-btn').addEventListener('click', () => {
             const activeObj = fCanvas.getActiveObject();
             if (activeObj) {
                 fCanvas.remove(activeObj);
-                saveCurrentPageData();
+                saveAllBoxData(); // Save all boxes after deletion
             }
         });
 
-        function saveCurrentPageData() {
+        function saveAllBoxData() {
+            // Save page-specific settings (checkboxes and boxes)
             if (!projectSettings.page_configs[pageNum]) {
                 projectSettings.page_configs[pageNum] = {};
             }
-
-            // Save Checkboxes
             projectSettings.page_configs[pageNum].isFrontCover = cbFrontCover.checked;
             projectSettings.page_configs[pageNum].isFullImage = cbFullImage.checked;
 
-            // Save Boxes (We need to save them relative to the original unscaled page size for backend processing)
-            const boxes = [];
+            const currentPageBoxes = [];
+            const globalSkipBoxes = [];
+
             fCanvas.getObjects().forEach(obj => {
-                boxes.push({
+                const boxData = {
                     type: obj.typeId,
                     // Store normalized coordinates (0 to 1) so it's resolution independent
                     x: obj.left / fCanvas.width,
                     y: obj.top / fCanvas.height,
                     width: (obj.width * obj.scaleX) / fCanvas.width,
                     height: (obj.height * obj.scaleY) / fCanvas.height
-                });
+                };
+                if (obj.typeId === 'global_skip') {
+                    globalSkipBoxes.push(boxData);
+                } else {
+                    currentPageBoxes.push(boxData);
+                }
             });
-            projectSettings.page_configs[pageNum].boxes = boxes;
+            projectSettings.page_configs[pageNum].boxes = currentPageBoxes;
+            // Update global skip areas only if we are on a page where a global skip box was modified/added/deleted
+            // This is a simplification; a more robust solution might track changes to global boxes separately
+            projectSettings.global_skip_areas = globalSkipBoxes.filter((box, index, self) =>
+                index === self.findIndex((t) => (
+                    t.x === box.x && t.y === box.y && t.width === box.width && t.height === box.height
+                ))
+            );
+
+            updateChapterNav();
         }
 
-        function loadCurrentPageData() {
+        function loadAllBoxData() {
             fCanvas.clear();
             const config = projectSettings.page_configs[pageNum] || {};
 
@@ -341,11 +405,20 @@
             cbFrontCover.checked = !!config.isFrontCover;
             cbFullImage.checked = !!config.isFullImage;
 
-            // Load Boxes
+            // Load Page-specific Boxes
             if (config.boxes && config.boxes.length > 0) {
                 config.boxes.forEach(box => {
-                    let color = box.type === 'skip' ? 'rgba(220, 53, 69, 0.3)' : 'rgba(40, 167, 69, 0.3)';
-                    let strokeColor = box.type === 'skip' ? 'red' : 'green';
+                    let color, strokeColor;
+                    if (box.type === 'skip') {
+                        color = 'rgba(220, 53, 69, 0.3)';
+                        strokeColor = 'red';
+                    } else if (box.type === 'image') {
+                        color = 'rgba(40, 167, 69, 0.3)';
+                        strokeColor = 'green';
+                    } else if (box.type === 'chapter_start') {
+                        color = 'rgba(23, 162, 184, 0.3)';
+                        strokeColor = '#17a2b8';
+                    }
 
                     let rect = new fabric.Rect({
                         left: box.x * fCanvas.width,
@@ -364,11 +437,34 @@
                     fCanvas.add(rect);
                 });
             }
+
+            // Load Global Skip Areas
+            if (projectSettings.global_skip_areas && projectSettings.global_skip_areas.length > 0) {
+                projectSettings.global_skip_areas.forEach(box => {
+                    let rect = new fabric.Rect({
+                        left: box.x * fCanvas.width,
+                        top: box.y * fCanvas.height,
+                        width: box.width * fCanvas.width,
+                        height: box.height * fCanvas.height,
+                        fill: 'rgba(220, 53, 69, 0.15)', // Lighter red for global
+                        stroke: 'red',
+                        strokeDashArray: [5, 5], // Dashed border for global
+                        strokeWidth: 2,
+                        transparentCorners: false,
+                        hasRotatingPoint: false,
+                        typeId: 'global_skip',
+                        selectable: currentTool === 'select' || currentTool === 'draw_global_skip', // Selectable if select tool or global draw tool is active
+                        evented: currentTool === 'select' || currentTool === 'draw_global_skip'
+                    });
+                    fCanvas.add(rect);
+                });
+            }
+            fCanvas.requestRenderAll();
         }
 
         // Checkbox listeners
-        cbFrontCover.addEventListener('change', saveCurrentPageData);
-        cbFullImage.addEventListener('change', saveCurrentPageData);
+        cbFrontCover.addEventListener('change', saveAllBoxData);
+        cbFullImage.addEventListener('change', saveAllBoxData);
 
         // Render the page
         function renderPage(num) {
@@ -397,7 +493,8 @@
                     pageRendering = false;
 
                     // Now that we have the right dimensions, load the fabric data
-                    loadCurrentPageData();
+                    loadAllBoxData();
+                    updateChapterNav();
 
                     if (pageNumPending !== null) {
                         renderPage(pageNumPending);
@@ -420,14 +517,14 @@
 
         function onPrevPage() {
             if (pageNum <= 1) return;
-            saveCurrentPageData();
+            saveAllBoxData(); // Save current page's state before leaving
             pageNum--;
             queueRenderPage(pageNum);
         }
 
         function onNextPage() {
             if (pageNum >= pdfDoc.numPages) return;
-            saveCurrentPageData();
+            saveAllBoxData(); // Save current page's state before leaving
             pageNum++;
             queueRenderPage(pageNum);
         }
@@ -437,7 +534,7 @@
 
         // Zoom functionality
         document.getElementById('zoom-in').addEventListener('click', () => {
-            saveCurrentPageData();
+            saveAllBoxData(); // Save current page's state before changing zoom
             scale += 0.25;
             zoomValEl.textContent = Math.round(scale * 100) + '%';
             queueRenderPage(pageNum);
@@ -445,11 +542,49 @@
 
         document.getElementById('zoom-out').addEventListener('click', () => {
             if (scale <= 0.5) return;
-            saveCurrentPageData();
+            saveAllBoxData(); // Save current page's state before changing zoom
             scale -= 0.25;
             zoomValEl.textContent = Math.round(scale * 100) + '%';
             queueRenderPage(pageNum);
         });
+
+        function updateChapterNav() {
+            chapterNavList.innerHTML = ''; // Clear existing list
+
+            // Sort page numbers numerically
+            const pageNumbers = Object.keys(projectSettings.page_configs).map(Number).sort((a, b) => a - b);
+
+            for (const pNum of pageNumbers) {
+                const config = projectSettings.page_configs[pNum];
+                if (config && config.boxes) {
+                    const hasChapterMark = config.boxes.some(box => box.type === 'chapter_start');
+                    if (hasChapterMark) {
+                        const li = document.createElement('li');
+                        const a = document.createElement('a');
+                        a.href = '#';
+                        a.textContent = `Page ${pNum}`;
+                        a.dataset.pageNum = pNum;
+
+                        if (pNum === pageNum) {
+                            a.classList.add('active');
+                        }
+
+                        a.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            const targetPage = parseInt(e.target.dataset.pageNum, 10);
+                            if (targetPage !== pageNum) {
+                               saveAllBoxData(); // Save current work before jumping
+                               pageNum = targetPage;
+                               queueRenderPage(pageNum);
+                            }
+                        });
+
+                        li.appendChild(a);
+                        chapterNavList.appendChild(li);
+                    }
+                }
+            }
+        }
 
         // Load PDF Document
         loadingMsg.style.display = 'block';
@@ -463,13 +598,14 @@
             document.getElementById('page-size').value = projectSettings.page_size || 'kindle';
 
             renderPage(pageNum);
+            updateChapterNav(); // Initial population
         }).catch(err => {
             loadingMsg.textContent = 'Error loading PDF: ' + err.message;
         });
 
         // Save to backend
         document.getElementById('save-btn').addEventListener('click', () => {
-            saveCurrentPageData(); // Ensure the very latest is saved
+            saveAllBoxData(); // Ensure the very latest is saved
 
             projectSettings.page_size = document.getElementById('page-size').value;
             const projName = projectNameInput.value.trim();
@@ -498,7 +634,7 @@
             const newName = prompt("Enter the name for the new project duplicate:", projectNameInput.value + " (Copy)");
             if (!newName) return;
 
-            saveCurrentPageData();
+            saveAllBoxData(); // Ensure the very latest is saved
             projectSettings.page_size = document.getElementById('page-size').value;
 
             fetch(`/project/${projectId}/save_as`, {
