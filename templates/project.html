@@ -8,10 +8,13 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <!-- Fabric.js for drawing interactive boxes -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <!-- Socket.IO -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        body { font-family: sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        #app-container { display: flex; flex-grow: 1; overflow: hidden; width: 100%; }
         #sidebar { width: 350px; background: #f8f9fa; padding: 1.5rem; box-sizing: border-box; overflow-y: auto; border-right: 1px solid #ddd; }
-        #main-content { flex-grow: 1; display: flex; flex-direction: column; background: #e9ecef; }
+        #main-content { flex-grow: 1; display: flex; flex-direction: column; background: #e9ecef; position: relative; }
         #right-sidebar { width: 250px; background: #f8f9fa; padding: 1.5rem; box-sizing: border-box; overflow-y: auto; border-left: 1px solid #ddd; }
 
         .controls-top { padding: 10px; background: #fff; border-bottom: 1px solid #ccc; display: flex; align-items: center; gap: 15px; justify-content: center; }
@@ -64,6 +67,7 @@
             font-size: 1.1rem; cursor: pointer;
         }
         .primary-btn:hover { background: #218838; }
+        .primary-btn:disabled { background: #6c757d; cursor: not-allowed; }
 
         .secondary-btn {
             display: block; width: 100%; padding: 10px; margin-top: 10px;
@@ -86,87 +90,126 @@
         #chapter-nav-list li a { display: block; padding: 8px; text-decoration: none; color: #007bff; border-radius: 4px; }
         #chapter-nav-list li a:hover { background-color: #e9ecef; }
         #chapter-nav-list li a.active { background-color: #007bff; color: white; }
+
+        /* Status Pane at the bottom */
+        #status-pane {
+            height: 45px;
+            background: #343a40;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            font-size: 0.95rem;
+            flex-shrink: 0;
+            box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
+        }
+        #status-text { min-width: 250px; font-weight: bold; }
+        #progress-container { flex-grow: 1; margin: 0 20px; background: #495057; height: 18px; border-radius: 10px; overflow: hidden; display: none; }
+        #progress-bar { width: 0%; height: 100%; background: #28a745; transition: width 0.3s; }
+        #status-action { min-width: 150px; text-align: right; }
+        #download-btn { display: none; color: #fff; background: #28a745; padding: 6px 15px; text-decoration: none; border-radius: 4px; font-weight: bold; }
+        #download-btn:hover { background: #218838; }
+        #reset-btn { display: none; color: #fff; background: #dc3545; padding: 6px 15px; text-decoration: none; border-radius: 4px; font-weight: bold; cursor: pointer; }
+        #reset-btn:hover { background: #c82333; }
+
+        .api-warning { background: #dc3545; color: white; padding: 10px; text-align: center; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div id="sidebar">
-        <a href="/" style="color: #007bff; text-decoration: none; display: block; margin-bottom: 15px;">&larr; Back to Projects</a>
-
-        <div class="form-group">
-            <label for="project-name">Project Name:</label>
-            <input type="text" id="project-name" value="{{ project.project_name }}">
-        </div>
-
-        <hr>
-
-        <div class="form-group">
-            <label for="page-size">Target Page Size (Global):</label>
-            <select id="page-size">
-                <option value="kindle">Optimize for Kindle</option>
-                <option value="default">Default</option>
-            </select>
-        </div>
-
-        <hr>
-
-        <h3>Page <span id="sidebar-page-num">1</span> Settings</h3>
-        <div class="form-group">
-            <label style="font-weight: normal; display: flex; align-items: center; gap: 8px;">
-                <input type="checkbox" id="mark-front-cover"> Mark as Front Cover (No OCR)
-            </label>
-            <label style="font-weight: normal; display: flex; align-items: center; gap: 8px;">
-                <input type="checkbox" id="mark-full-image"> Mark as Full Page Image (No OCR)
-            </label>
-        </div>
-
-        <hr>
-
-        <h3>Drawing Tools</h3>
-        <p style="font-size: 0.9em; color: #666;">Draw boxes to specify how the area should be processed.</p>
-
-        <button class="tool-btn active" id="tool-select">Select / Move</button>
-        <button class="tool-btn" id="tool-draw-skip" style="border-color: #dc3545; color: #dc3545;">Draw Skip Area (Red, Current Page)</button>
-        <button class="tool-btn" id="tool-draw-global-skip" style="border-color: #dc3545; color: #dc3545; border-style: dashed;">Draw Skip Area (Red, All Pages)</button>
-        <button class="tool-btn" id="tool-draw-image" style="border-color: #28a745; color: #28a745;">Draw Image Area (Green, Current Page)</button>
-        <button class="tool-btn" id="tool-draw-chapter" style="border-color: #17a2b8; color: #17a2b8;">Mark Chapter Start (Blue, Current Page)</button>
-        <button class="tool-btn danger" id="delete-selected-btn" style="margin-top: 20px;">Delete Selected Box</button>
-
-        <hr>
-
-        <button class="primary-btn" id="save-btn" style="background: #007bff;">Save Project</button>
-        <button class="secondary-btn" id="save-as-btn">Save As New Project...</button>
-        <button class="primary-btn" id="start-ocr-btn" style="margin-top: 20px;">Start OCR Processing</button>
-
-        <div id="status-area" style="margin-top: 1rem; text-align: center; font-weight: bold; color: #555;">
-            Status: {{ project.status }}
-        </div>
+    {% if not api_key_set %}
+    <div class="api-warning">
+        Warning: TYPHOON_API_KEY environment variable is not set. OCR tasks will fail.
     </div>
+    {% endif %}
 
-    <div id="main-content">
-        <div class="controls-top">
-            <button id="prev-page">Previous</button>
-            <span>Page: <span id="page-num"></span> / <span id="page-count"></span></span>
-            <button id="next-page">Next</button>
-            <span style="margin-left: 20px;">Zoom: </span>
-            <button id="zoom-out">-</button>
-            <span id="zoom-val">100%</span>
-            <button id="zoom-in">+</button>
+    <div id="app-container">
+        <div id="sidebar">
+            <a href="/" style="color: #007bff; text-decoration: none; display: block; margin-bottom: 15px;">&larr; Back to Projects</a>
+
+            <div class="form-group">
+                <label for="project-name">Project Name:</label>
+                <input type="text" id="project-name" value="{{ project.project_name }}">
+            </div>
+
+            <hr>
+
+            <div class="form-group">
+                <label for="page-size">Target Page Size (Global):</label>
+                <select id="page-size">
+                    <option value="kindle">Optimize for Kindle</option>
+                    <option value="default">Default</option>
+                </select>
+            </div>
+
+            <hr>
+
+            <h3>Page <span id="sidebar-page-num">1</span> Settings</h3>
+            <div class="form-group">
+                <label style="font-weight: normal; display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="mark-front-cover"> Mark as Front Cover (No OCR)
+                </label>
+                <label style="font-weight: normal; display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="mark-full-image"> Mark as Full Page Image (No OCR)
+                </label>
+            </div>
+
+            <hr>
+
+            <h3>Drawing Tools</h3>
+            <p style="font-size: 0.9em; color: #666;">Draw boxes to specify how the area should be processed.</p>
+
+            <button class="tool-btn active" id="tool-select">Select / Move</button>
+            <button class="tool-btn" id="tool-draw-skip" style="border-color: #dc3545; color: #dc3545;">Draw Skip Area (Red, Current Page)</button>
+            <button class="tool-btn" id="tool-draw-global-skip" style="border-color: #dc3545; color: #dc3545; border-style: dashed;">Draw Skip Area (Red, All Pages)</button>
+            <button class="tool-btn" id="tool-draw-image" style="border-color: #28a745; color: #28a745;">Draw Image Area (Green, Current Page)</button>
+            <button class="tool-btn" id="tool-draw-chapter" style="border-color: #17a2b8; color: #17a2b8;">Mark Chapter Start (Blue, Current Page)</button>
+            <button class="tool-btn danger" id="delete-selected-btn" style="margin-top: 20px;">Delete Selected Box</button>
+
+            <hr>
+
+            <button class="primary-btn" id="save-btn" style="background: #007bff;">Save Project</button>
+            <button class="secondary-btn" id="save-as-btn">Save As New Project...</button>
+            <button class="primary-btn" id="start-ocr-btn" style="margin-top: 20px;">Start OCR Processing</button>
         </div>
 
-        <div id="viewer-container">
-            <div id="loading-msg" class="loading">Loading PDF...</div>
-            <div class="canvas-wrapper" id="canvas-wrapper" style="display: none;">
-                <canvas id="pdf-canvas"></canvas>
-                <canvas id="fabric-canvas"></canvas>
+        <div id="main-content">
+            <div class="controls-top">
+                <button id="prev-page">Previous</button>
+                <span>Page: <span id="page-num"></span> / <span id="page-count"></span></span>
+                <button id="next-page">Next</button>
+                <span style="margin-left: 20px;">Zoom: </span>
+                <button id="zoom-out">-</button>
+                <span id="zoom-val">100%</span>
+                <button id="zoom-in">+</button>
+            </div>
+
+            <div id="viewer-container">
+                <div id="loading-msg" class="loading">Loading PDF...</div>
+                <div class="canvas-wrapper" id="canvas-wrapper" style="display: none;">
+                    <canvas id="pdf-canvas"></canvas>
+                    <canvas id="fabric-canvas"></canvas>
+                </div>
             </div>
         </div>
+
+        <div id="right-sidebar">
+            <h3>Chapters</h3>
+            <ul id="chapter-nav-list">
+                <!-- Chapter links will be dynamically inserted here -->
+            </ul>
+        </div>
     </div>
 
-    <div id="right-sidebar">
-        <h3>Chapters</h3>
-        <ul id="chapter-nav-list">
-            <!-- Chapter links will be dynamically inserted here -->
-        </ul>
+    <!-- Status Pane -->
+    <div id="status-pane">
+        <div id="status-text">Status: {{ project.status }}</div>
+        <div id="progress-container">
+            <div id="progress-bar"></div>
+        </div>
+        <div id="status-action">
+            <a id="download-btn" href="{{ url_for('download_epub', project_id=project.id) }}" download>Download ePub</a>
+            <button id="reset-btn">Force Reset</button>
+        </div>
     </div>
 
     <script>
@@ -216,6 +259,66 @@
         const toolImage = document.getElementById('tool-draw-image');
         const toolChapter = document.getElementById('tool-draw-chapter');
 
+        // Socket.IO and Status Elements
+        const socket = io();
+        const statusText = document.getElementById('status-text');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const downloadBtn = document.getElementById('download-btn');
+        const startOcrBtn = document.getElementById('start-ocr-btn');
+        const resetBtn = document.getElementById('reset-btn');
+
+        // Initialize status UI based on project state
+        const initialStatus = '{{ project.status }}';
+        if (initialStatus === 'done') {
+            downloadBtn.style.display = 'inline-block';
+            statusText.textContent = 'Status: Complete';
+        } else if (initialStatus === 'processing' || initialStatus === 'error') {
+            resetBtn.style.display = 'inline-block';
+            startOcrBtn.disabled = true;
+            if (initialStatus === 'processing') {
+                statusText.textContent = 'Status: Stuck (Processing)';
+            } else {
+                statusText.textContent = 'Status: Error';
+            }
+        }
+
+        socket.on('connect', () => {
+            console.log('Connected to WebSocket server.');
+        });
+
+        socket.on('ocr_progress', (data) => {
+            if (data.project_id === projectId) {
+                progressContainer.style.display = 'block';
+                progressBar.style.background = '#28a745';
+                progressBar.style.width = data.percent + '%';
+                statusText.textContent = `Status: Processing OCR... ${data.percent}%`;
+            }
+        });
+
+        socket.on('ocr_complete', (data) => {
+            if (data.project_id === projectId) {
+                statusText.textContent = 'Status: Complete';
+                progressBar.style.width = '100%';
+                setTimeout(() => { progressContainer.style.display = 'none'; }, 2000);
+                downloadBtn.style.display = 'inline-block';
+                startOcrBtn.disabled = false;
+                resetBtn.style.display = 'none';
+                alert("OCR Complete! You can now download the generated ePub from the bottom panel.");
+            }
+        });
+
+        socket.on('ocr_error', (data) => {
+            if (data.project_id === projectId) {
+                statusText.textContent = 'Status: Error - ' + data.error;
+                progressContainer.style.display = 'none';
+                startOcrBtn.disabled = false;
+                resetBtn.style.display = 'inline-block';
+                alert("Error during OCR process:\n" + data.error);
+            }
+        });
+
+
         function setActiveTool(tool, element) {
             currentTool = tool;
             [toolSelect, toolSkip, toolGlobalSkip, toolImage, toolChapter].forEach(el => el.classList.remove('active'));
@@ -227,7 +330,6 @@
             toolImage.style.backgroundColor = ''; toolImage.style.color = '#28a745';
             toolChapter.style.backgroundColor = ''; toolChapter.style.color = '#17a2b8';
 
-
             if (tool === 'select') {
                 fCanvas.isDrawingMode = false;
                 fCanvas.selection = true;
@@ -237,10 +339,9 @@
                 });
                 fCanvas.defaultCursor = 'default';
             } else {
-                fCanvas.isDrawingMode = false; // We use custom mouse events for drawing rects
+                fCanvas.isDrawingMode = false;
                 fCanvas.selection = false;
                 fCanvas.forEachObject(function(o) {
-                    // Only make global skip boxes unselectable if not in global skip drawing mode
                     if (o.typeId === 'global_skip' && tool !== 'draw_global_skip') {
                         o.set('selectable', false);
                         o.set('evented', false);
@@ -387,7 +488,6 @@
             });
             projectSettings.page_configs[pageNum].boxes = currentPageBoxes;
             // Update global skip areas only if we are on a page where a global skip box was modified/added/deleted
-            // This is a simplification; a more robust solution might track changes to global boxes separately
             projectSettings.global_skip_areas = globalSkipBoxes.filter((box, index, self) =>
                 index === self.findIndex((t) => (
                     t.x === box.x && t.y === box.y && t.width === box.width && t.height === box.height
@@ -453,7 +553,7 @@
                         transparentCorners: false,
                         hasRotatingPoint: false,
                         typeId: 'global_skip',
-                        selectable: currentTool === 'select' || currentTool === 'draw_global_skip', // Selectable if select tool or global draw tool is active
+                        selectable: currentTool === 'select' || currentTool === 'draw_global_skip',
                         evented: currentTool === 'select' || currentTool === 'draw_global_skip'
                     });
                     fCanvas.add(rect);
@@ -652,6 +752,66 @@
                     window.location.href = `/project/${data.new_project_id}`;
                 } else {
                     alert('Error duplicating project: ' + data.error);
+                }
+            });
+        });
+
+        // Start OCR Processing
+        startOcrBtn.addEventListener('click', () => {
+            saveAllBoxData(); // Ensure the very latest is saved
+
+            projectSettings.page_size = document.getElementById('page-size').value;
+            const projName = projectNameInput.value.trim();
+
+            startOcrBtn.disabled = true;
+            statusText.textContent = 'Status: Starting OCR...';
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            downloadBtn.style.display = 'none';
+            resetBtn.style.display = 'none';
+
+            fetch(`/project/${projectId}/start_ocr`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    project_name: projName,
+                    settings: projectSettings
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert('Error starting OCR: ' + data.error);
+                    startOcrBtn.disabled = false;
+                    statusText.textContent = 'Status: Error';
+                    progressContainer.style.display = 'none';
+                    resetBtn.style.display = 'inline-block';
+                } else {
+                    console.log("OCR started successfully");
+                }
+            })
+            .catch(err => {
+                alert('Network error starting OCR.');
+                startOcrBtn.disabled = false;
+                statusText.textContent = 'Status: Error';
+                progressContainer.style.display = 'none';
+                resetBtn.style.display = 'inline-block';
+            });
+        });
+
+        // Force Reset Button
+        resetBtn.addEventListener('click', () => {
+            if (!confirm("Are you sure you want to force reset the status of this project? This should only be used if the process is stuck.")) {
+                return;
+            }
+            fetch(`/project/${projectId}/reset_status`, { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert("Project status has been reset. Reloading page.");
+                    window.location.reload();
+                } else {
+                    alert("Failed to reset status: " + data.error);
                 }
             });
         });

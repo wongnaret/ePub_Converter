@@ -1,17 +1,26 @@
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import uuid
 import json
 import shutil
+import threading
+import traceback
+import sys
 from flask import Flask, render_template, request, redirect, url_for, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
+
+# Import the backend conversion logic
+from epub_converter import convert_project
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here'  # Change this in production
 app.config['UPLOAD_FOLDER'] = 'projects'
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB limit
 
-socketio = SocketIO(app, async_mode='eventlet')
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 
 # Ensure the upload folder exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -92,7 +101,9 @@ def project_view(project_id):
     project_data = get_project_data(project_id)
     if not project_data:
         return 'Project not found', 404
-    return render_template('project.html', project=project_data)
+        
+    api_key_set = bool(os.environ.get("TYPHOON_API_KEY"))
+    return render_template('project.html', project=project_data, api_key_set=api_key_set)
 
 @app.route('/project/<project_id>/pdf')
 def serve_pdf(project_id):
@@ -100,6 +111,15 @@ def serve_pdf(project_id):
     if not project_data:
         return 'Project not found', 404
     return send_from_directory(get_project_path(project_id), project_data['pdf_path'])
+    
+@app.route('/project/<project_id>/download_epub')
+def download_epub(project_id):
+    project_data = get_project_data(project_id)
+    if not project_data or project_data.get('status') != 'done':
+        return 'ePub not ready or project not found', 404
+    
+    epub_filename = f"{project_data.get('project_name', 'output')}.epub"
+    return send_from_directory(get_project_path(project_id), epub_filename, as_attachment=True)
 
 @app.route('/project/<project_id>/save_settings', methods=['POST'])
 def save_settings(project_id):
@@ -160,6 +180,75 @@ def save_as_new_project(project_id):
             shutil.rmtree(new_project_dir)
         return jsonify({'error': str(e)}), 500
 
+@app.route('/project/<project_id>/reset_status', methods=['POST'])
+def reset_status(project_id):
+    """Allows forcing the project status back to 'new' if it gets stuck."""
+    project_data = get_project_data(project_id)
+    if not project_data:
+        return jsonify({'error': 'Project not found'}), 404
+        
+    project_data['status'] = 'new'
+    save_project_data(project_id, project_data)
+    return jsonify({'success': True})
+
+@app.route('/project/<project_id>/start_ocr', methods=['POST'])
+def start_ocr(project_id):
+    project_data = get_project_data(project_id)
+    if not project_data:
+        return jsonify({'error': 'Project not found'}), 404
+        
+    if project_data.get('status') == 'processing':
+         return jsonify({'error': 'Project is already processing. If it is stuck, please force reset it.'}), 400
+        
+    api_key = os.environ.get("TYPHOON_API_KEY")
+    if not api_key:
+         return jsonify({'error': 'TYPHOON_API_KEY environment variable is not set.'}), 400
+
+    # Ensure latest settings are saved before starting
+    payload = request.json
+    if payload and 'settings' in payload:
+         project_data['settings'] = payload['settings']
+         
+    project_data['status'] = 'processing'
+    save_project_data(project_id, project_data)
+
+    # Start OCR in a background thread
+    print(f"[{project_id}] Starting OCR background thread...")
+    thread = threading.Thread(target=run_ocr_background, args=(project_id, project_data, get_project_path(project_id), api_key))
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({'success': True})
+
+def run_ocr_background(project_id, project_data, project_dir, api_key):
+    try:
+        def progress_callback(percent):
+            # Print to command line
+            print(f"[{project_id}] OCR Progress: {percent}%")
+            # Send to web UI
+            socketio.emit('ocr_progress', {'project_id': project_id, 'percent': percent})
+            
+        print(f"[{project_id}] Calling convert_project...")
+        convert_project(project_data, project_dir, api_key, progress_callback=progress_callback)
+        
+        print(f"[{project_id}] OCR Complete.")
+        # Update status to done
+        project_data = get_project_data(project_id) # reload to be safe
+        project_data['status'] = 'done'
+        save_project_data(project_id, project_data)
+        
+        socketio.emit('ocr_complete', {'project_id': project_id})
+        
+    except Exception as e:
+        print(f"[{project_id}] Background OCR Error: {e}", file=sys.stderr)
+        traceback.print_exc()
+        
+        project_data = get_project_data(project_id)
+        project_data['status'] = 'error'
+        save_project_data(project_id, project_data)
+        socketio.emit('ocr_error', {'project_id': project_id, 'error': str(e)})
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, port=5000)
+    print("Warning: Please use 'python run.py' to start the server to ensure background tasks work correctly.")
+    app.debug = True
+    socketio.run(app, port=5000)

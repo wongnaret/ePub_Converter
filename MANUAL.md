@@ -36,14 +36,14 @@ Set an environment variable named `TYPHOON_API_KEY` before starting the applicat
 The application now runs as a local web server, providing a UI for managing projects and PDFs.
 
 1. Ensure your virtual environment is activated and dependencies are installed.
-2. Start the web server by running the following command:
+2. Start the web server by running the new launcher script:
    ```bash
-   python app.py
+   python run.py
    ```
 3. Open your web browser and go to:
    **http://localhost:5000**
 
-From the web interface, you can upload new PDFs to create projects, resume existing projects, and eventually configure the OCR settings and page properties.
+From the web interface, you can upload new PDFs to create projects, configure page settings with interactive tools, and run the OCR processing in the background.
 
 ## 5. Using the Command Line Tool (Legacy)
 

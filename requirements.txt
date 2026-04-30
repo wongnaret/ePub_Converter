@@ -7,3 +7,4 @@ Flask
 Flask-SocketIO
 python-socketio
 eventlet
+werkzeug
