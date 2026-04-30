@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF to ePub Converter</title>
+    <style>
+        body { font-family: sans-serif; margin: 2rem; background: #f4f4f9; }
+        h1, h2 { color: #333; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .upload-form { border: 2px dashed #007bff; padding: 2rem; text-align: center; margin-bottom: 2rem; border-radius: 8px; }
+        .upload-form input[type="file"] { margin-bottom: 1rem; }
+        .upload-form input[type="text"] { padding: 0.5rem; width: 60%; margin-bottom: 1rem; }
+        .upload-form button { padding: 0.7rem 1.5rem; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .projects-list { list-style: none; padding: 0; }
+        .projects-list li { margin-bottom: 0.7rem; background: #f8f9fa; padding: 1rem; border-radius: 4px; }
+        .projects-list a { text-decoration: none; color: #0056b3; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PDF to ePub Converter</h1>
+
+        <div class="upload-form">
+            <h2>Create New Project</h2>
+            <form action="/upload" method="post" enctype="multipart/form-data">
+                <input type="text" name="project_name" placeholder="Enter Project Name (Optional)"><br>
+                <input type="file" name="file" accept="application/pdf" required><br>
+                <button type="submit">Upload PDF & Create Project</button>
+            </form>
+        </div>
+
+        <h2>Existing Projects</h2>
+        <ul class="projects-list">
+            {% for project in projects %}
+                <li><a href="{{ url_for('project_view', project_id=project.id) }}">{{ project.name }}</a></li>
+            {% else %}
+                <li>No projects found.</li>
+            {% endfor %}
+        </ul>
+    </div>
+</body>
+</html>

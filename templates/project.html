@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project: {{ project.project_name }}</title>
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <!-- Fabric.js for drawing interactive boxes -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        #sidebar { width: 350px; background: #f8f9fa; padding: 1.5rem; box-sizing: border-box; overflow-y: auto; border-right: 1px solid #ddd; }
+        #main-content { flex-grow: 1; display: flex; flex-direction: column; background: #e9ecef; }
+
+        .controls-top { padding: 10px; background: #fff; border-bottom: 1px solid #ccc; display: flex; align-items: center; gap: 15px; justify-content: center; }
+        .controls-top button { padding: 5px 15px; cursor: pointer; }
+
+        #viewer-container {
+            flex-grow: 1;
+            overflow: auto;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 20px;
+        }
+
+        /* The wrapper holding both PDF canvas and Fabric.js canvas */
+        .canvas-wrapper {
+            position: relative;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            background: white;
+        }
+
+        #pdf-canvas {
+            display: block;
+        }
+
+        .canvas-container { /* This is injected by fabric.js */
+            position: absolute !important;
+            top: 0;
+            left: 0;
+        }
+
+        h2 { font-size: 1.2rem; margin-top: 0; margin-bottom: 15px; word-wrap: break-word; }
+        hr { border: 0; border-top: 1px solid #ccc; margin: 15px 0; }
+
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+        .form-group select, .form-group input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; }
+
+        .tool-btn {
+            display: block; width: 100%; padding: 10px; margin-bottom: 10px;
+            background: #fff; border: 1px solid #007bff; color: #007bff;
+            cursor: pointer; border-radius: 4px; text-align: center;
+        }
+        .tool-btn.active { background: #007bff; color: #fff; }
+        .tool-btn.danger { border-color: #dc3545; color: #dc3545; }
+
+        .primary-btn {
+            display: block; width: 100%; padding: 12px; margin-top: 10px;
+            background: #28a745; color: white; border: none; border-radius: 4px;
+            font-size: 1.1rem; cursor: pointer;
+        }
+        .primary-btn:hover { background: #218838; }
+
+        .secondary-btn {
+            display: block; width: 100%; padding: 10px; margin-top: 10px;
+            background: #6c757d; color: white; border: none; border-radius: 4px;
+            font-size: 1rem; cursor: pointer;
+        }
+        .secondary-btn:hover { background: #5a6268; }
+
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 1.5rem;
+            color: #555;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <a href="/" style="color: #007bff; text-decoration: none; display: block; margin-bottom: 15px;">&larr; Back to Projects</a>
+
+        <div class="form-group">
+            <label for="project-name">Project Name:</label>
+            <input type="text" id="project-name" value="{{ project.project_name }}">
+        </div>
+
+        <hr>
+
+        <div class="form-group">
+            <label for="page-size">Target Page Size (Global):</label>
+            <select id="page-size">
+                <option value="kindle">Optimize for Kindle</option>
+                <option value="default">Default</option>
+            </select>
+        </div>
+
+        <hr>
+
+        <h3>Page <span id="sidebar-page-num">1</span> Settings</h3>
+        <div class="form-group">
+            <label style="font-weight: normal; display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="mark-front-cover"> Mark as Front Cover (No OCR)
+            </label>
+            <label style="font-weight: normal; display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="mark-full-image"> Mark as Full Page Image (No OCR)
+            </label>
+        </div>
+
+        <hr>
+
+        <h3>Drawing Tools</h3>
+        <p style="font-size: 0.9em; color: #666;">Draw boxes to specify how the area should be processed.</p>
+
+        <button class="tool-btn active" id="tool-select">Select / Move</button>
+        <button class="tool-btn" id="tool-draw-skip" style="border-color: #dc3545; color: #dc3545;">Draw Skip Area (Red)</button>
+        <button class="tool-btn" id="tool-draw-image" style="border-color: #28a745; color: #28a745;">Draw Image Area (Green)</button>
+        <button class="tool-btn danger" id="delete-selected-btn" style="margin-top: 20px;">Delete Selected Box</button>
+
+        <hr>
+
+        <button class="primary-btn" id="save-btn" style="background: #007bff;">Save Project</button>
+        <button class="secondary-btn" id="save-as-btn">Save As New Project...</button>
+        <button class="primary-btn" id="start-ocr-btn" style="margin-top: 20px;">Start OCR Processing</button>
+
+        <div id="status-area" style="margin-top: 1rem; text-align: center; font-weight: bold; color: #555;">
+            Status: {{ project.status }}
+        </div>
+    </div>
+
+    <div id="main-content">
+        <div class="controls-top">
+            <button id="prev-page">Previous</button>
+            <span>Page: <span id="page-num"></span> / <span id="page-count"></span></span>
+            <button id="next-page">Next</button>
+            <span style="margin-left: 20px;">Zoom: </span>
+            <button id="zoom-out">-</button>
+            <span id="zoom-val">100%</span>
+            <button id="zoom-in">+</button>
+        </div>
+
+        <div id="viewer-container">
+            <div id="loading-msg" class="loading">Loading PDF...</div>
+            <div class="canvas-wrapper" id="canvas-wrapper" style="display: none;">
+                <canvas id="pdf-canvas"></canvas>
+                <canvas id="fabric-canvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const projectId = "{{ project.id }}";
+        const pdfUrl = "{{ url_for('serve_pdf', project_id=project.id) }}";
+
+        // Initial Project Data from Backend
+        let projectSettings = {{ project.settings | tojson | safe }} || { page_size: 'kindle', page_configs: {} };
+        if (!projectSettings.page_configs) projectSettings.page_configs = {};
+
+        // PDF.js setup
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+        let pdfDoc = null;
+        let pageNum = 1;
+        let pageRendering = false;
+        let pageNumPending = null;
+        let scale = 1.5; // Initial zoom
+
+        const canvasWrapper = document.getElementById('canvas-wrapper');
+        const pdfCanvas = document.getElementById('pdf-canvas');
+        const ctx = pdfCanvas.getContext('2d');
+
+        // Fabric.js setup
+        let fCanvas = new fabric.Canvas('fabric-canvas');
+        let currentTool = 'select'; // select, draw_skip, draw_image
+        let isDrawing = false;
+        let rect, origX, origY;
+
+        // UI Elements
+        const pageNumEl = document.getElementById('page-num');
+        const pageCountEl = document.getElementById('page-count');
+        const sidebarPageNumEl = document.getElementById('sidebar-page-num');
+        const loadingMsg = document.getElementById('loading-msg');
+        const zoomValEl = document.getElementById('zoom-val');
+        const projectNameInput = document.getElementById('project-name');
+
+        const cbFrontCover = document.getElementById('mark-front-cover');
+        const cbFullImage = document.getElementById('mark-full-image');
+
+        // Tool Buttons
+        const toolSelect = document.getElementById('tool-select');
+        const toolSkip = document.getElementById('tool-draw-skip');
+        const toolImage = document.getElementById('tool-draw-image');
+
+        function setActiveTool(tool, element) {
+            currentTool = tool;
+            [toolSelect, toolSkip, toolImage].forEach(el => el.classList.remove('active'));
+            element.classList.add('active');
+
+            if (tool === 'select') {
+                fCanvas.isDrawingMode = false;
+                fCanvas.selection = true;
+                fCanvas.forEachObject(function(o) {
+                    o.set('selectable', true);
+                    o.set('evented', true);
+                });
+                fCanvas.defaultCursor = 'default';
+            } else {
+                fCanvas.isDrawingMode = false; // We use custom mouse events for drawing rects
+                fCanvas.selection = false;
+                fCanvas.forEachObject(function(o) {
+                    o.set('selectable', false);
+                    o.set('evented', false);
+                });
+                fCanvas.discardActiveObject();
+                fCanvas.requestRenderAll();
+                fCanvas.defaultCursor = 'crosshair';
+            }
+        }
+
+        toolSelect.addEventListener('click', () => setActiveTool('select', toolSelect));
+        toolSkip.addEventListener('click', () => {
+            setActiveTool('draw_skip', toolSkip);
+            toolSkip.style.backgroundColor = '#dc3545';
+            toolSkip.style.color = '#fff';
+            toolImage.style.backgroundColor = '';
+            toolImage.style.color = '#28a745';
+        });
+        toolImage.addEventListener('click', () => {
+            setActiveTool('draw_image', toolImage);
+            toolImage.style.backgroundColor = '#28a745';
+            toolImage.style.color = '#fff';
+            toolSkip.style.backgroundColor = '';
+            toolSkip.style.color = '#dc3545';
+        });
+
+        // Fabric.js Mouse Events for Drawing Rectangles
+        fCanvas.on('mouse:down', function(o){
+            if (currentTool === 'select') return;
+
+            isDrawing = true;
+            var pointer = fCanvas.getPointer(o.e);
+            origX = pointer.x;
+            origY = pointer.y;
+
+            let color = currentTool === 'draw_skip' ? 'rgba(220, 53, 69, 0.3)' : 'rgba(40, 167, 69, 0.3)';
+            let strokeColor = currentTool === 'draw_skip' ? 'red' : 'green';
+            let typeId = currentTool === 'draw_skip' ? 'skip' : 'image';
+
+            rect = new fabric.Rect({
+                left: origX,
+                top: origY,
+                originX: 'left',
+                originY: 'top',
+                width: pointer.x - origX,
+                height: pointer.y - origY,
+                angle: 0,
+                fill: color,
+                stroke: strokeColor,
+                strokeWidth: 2,
+                transparentCorners: false,
+                hasRotatingPoint: false,
+                typeId: typeId // Custom property to identify the box type
+            });
+
+            fCanvas.add(rect);
+        });
+
+        fCanvas.on('mouse:move', function(o){
+            if (!isDrawing) return;
+            var pointer = fCanvas.getPointer(o.e);
+
+            if(origX > pointer.x){
+                rect.set({ left: Math.abs(pointer.x) });
+            }
+            if(origY > pointer.y){
+                rect.set({ top: Math.abs(pointer.y) });
+            }
+
+            rect.set({ width: Math.abs(origX - pointer.x) });
+            rect.set({ height: Math.abs(origY - pointer.y) });
+
+            fCanvas.renderAll();
+        });
+
+        fCanvas.on('mouse:up', function(o){
+            if (currentTool === 'select') return;
+            isDrawing = false;
+            if (rect.width < 5 || rect.height < 5) {
+                // Remove accidental tiny clicks
+                fCanvas.remove(rect);
+            }
+            saveCurrentPageData(); // Auto-save locally when drawing is done
+        });
+
+        // Modification events
+        fCanvas.on('object:modified', function(e) { saveCurrentPageData(); });
+
+        document.getElementById('delete-selected-btn').addEventListener('click', () => {
+            const activeObj = fCanvas.getActiveObject();
+            if (activeObj) {
+                fCanvas.remove(activeObj);
+                saveCurrentPageData();
+            }
+        });
+
+        function saveCurrentPageData() {
+            if (!projectSettings.page_configs[pageNum]) {
+                projectSettings.page_configs[pageNum] = {};
+            }
+
+            // Save Checkboxes
+            projectSettings.page_configs[pageNum].isFrontCover = cbFrontCover.checked;
+            projectSettings.page_configs[pageNum].isFullImage = cbFullImage.checked;
+
+            // Save Boxes (We need to save them relative to the original unscaled page size for backend processing)
+            const boxes = [];
+            fCanvas.getObjects().forEach(obj => {
+                boxes.push({
+                    type: obj.typeId,
+                    // Store normalized coordinates (0 to 1) so it's resolution independent
+                    x: obj.left / fCanvas.width,
+                    y: obj.top / fCanvas.height,
+                    width: (obj.width * obj.scaleX) / fCanvas.width,
+                    height: (obj.height * obj.scaleY) / fCanvas.height
+                });
+            });
+            projectSettings.page_configs[pageNum].boxes = boxes;
+        }
+
+        function loadCurrentPageData() {
+            fCanvas.clear();
+            const config = projectSettings.page_configs[pageNum] || {};
+
+            // Load Checkboxes
+            cbFrontCover.checked = !!config.isFrontCover;
+            cbFullImage.checked = !!config.isFullImage;
+
+            // Load Boxes
+            if (config.boxes && config.boxes.length > 0) {
+                config.boxes.forEach(box => {
+                    let color = box.type === 'skip' ? 'rgba(220, 53, 69, 0.3)' : 'rgba(40, 167, 69, 0.3)';
+                    let strokeColor = box.type === 'skip' ? 'red' : 'green';
+
+                    let rect = new fabric.Rect({
+                        left: box.x * fCanvas.width,
+                        top: box.y * fCanvas.height,
+                        width: box.width * fCanvas.width,
+                        height: box.height * fCanvas.height,
+                        fill: color,
+                        stroke: strokeColor,
+                        strokeWidth: 2,
+                        transparentCorners: false,
+                        hasRotatingPoint: false,
+                        typeId: box.type,
+                        selectable: currentTool === 'select',
+                        evented: currentTool === 'select'
+                    });
+                    fCanvas.add(rect);
+                });
+            }
+        }
+
+        // Checkbox listeners
+        cbFrontCover.addEventListener('change', saveCurrentPageData);
+        cbFullImage.addEventListener('change', saveCurrentPageData);
+
+        // Render the page
+        function renderPage(num) {
+            pageRendering = true;
+
+            pdfDoc.getPage(num).then(function(page) {
+                var viewport = page.getViewport({scale: scale});
+
+                // Adjust canvas wrappers
+                canvasWrapper.style.width = Math.floor(viewport.width) + "px";
+                canvasWrapper.style.height = Math.floor(viewport.height) + "px";
+
+                pdfCanvas.height = viewport.height;
+                pdfCanvas.width = viewport.width;
+
+                fCanvas.setHeight(viewport.height);
+                fCanvas.setWidth(viewport.width);
+
+                var renderContext = {
+                    canvasContext: ctx,
+                    viewport: viewport
+                };
+                var renderTask = page.render(renderContext);
+
+                renderTask.promise.then(function() {
+                    pageRendering = false;
+
+                    // Now that we have the right dimensions, load the fabric data
+                    loadCurrentPageData();
+
+                    if (pageNumPending !== null) {
+                        renderPage(pageNumPending);
+                        pageNumPending = null;
+                    }
+                });
+            });
+
+            pageNumEl.textContent = num;
+            sidebarPageNumEl.textContent = num;
+        }
+
+        function queueRenderPage(num) {
+            if (pageRendering) {
+                pageNumPending = num;
+            } else {
+                renderPage(num);
+            }
+        }
+
+        function onPrevPage() {
+            if (pageNum <= 1) return;
+            saveCurrentPageData();
+            pageNum--;
+            queueRenderPage(pageNum);
+        }
+
+        function onNextPage() {
+            if (pageNum >= pdfDoc.numPages) return;
+            saveCurrentPageData();
+            pageNum++;
+            queueRenderPage(pageNum);
+        }
+
+        document.getElementById('prev-page').addEventListener('click', onPrevPage);
+        document.getElementById('next-page').addEventListener('click', onNextPage);
+
+        // Zoom functionality
+        document.getElementById('zoom-in').addEventListener('click', () => {
+            saveCurrentPageData();
+            scale += 0.25;
+            zoomValEl.textContent = Math.round(scale * 100) + '%';
+            queueRenderPage(pageNum);
+        });
+
+        document.getElementById('zoom-out').addEventListener('click', () => {
+            if (scale <= 0.5) return;
+            saveCurrentPageData();
+            scale -= 0.25;
+            zoomValEl.textContent = Math.round(scale * 100) + '%';
+            queueRenderPage(pageNum);
+        });
+
+        // Load PDF Document
+        loadingMsg.style.display = 'block';
+        pdfjsLib.getDocument(pdfUrl).promise.then(function(pdfDoc_) {
+            pdfDoc = pdfDoc_;
+            pageCountEl.textContent = pdfDoc.numPages;
+            loadingMsg.style.display = 'none';
+            canvasWrapper.style.display = 'block';
+
+            // Set global settings
+            document.getElementById('page-size').value = projectSettings.page_size || 'kindle';
+
+            renderPage(pageNum);
+        }).catch(err => {
+            loadingMsg.textContent = 'Error loading PDF: ' + err.message;
+        });
+
+        // Save to backend
+        document.getElementById('save-btn').addEventListener('click', () => {
+            saveCurrentPageData(); // Ensure the very latest is saved
+
+            projectSettings.page_size = document.getElementById('page-size').value;
+            const projName = projectNameInput.value.trim();
+
+            fetch(`/project/${projectId}/save_settings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    project_name: projName,
+                    settings: projectSettings
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.title = "Project: " + data.project_name;
+                    alert('Project configuration saved successfully!');
+                } else {
+                    alert('Error saving project.');
+                }
+            });
+        });
+
+        // Save As New Project
+        document.getElementById('save-as-btn').addEventListener('click', () => {
+            const newName = prompt("Enter the name for the new project duplicate:", projectNameInput.value + " (Copy)");
+            if (!newName) return;
+
+            saveCurrentPageData();
+            projectSettings.page_size = document.getElementById('page-size').value;
+
+            fetch(`/project/${projectId}/save_as`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    new_project_name: newName,
+                    settings: projectSettings
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Project duplicated successfully! Redirecting...');
+                    window.location.href = `/project/${data.new_project_id}`;
+                } else {
+                    alert('Error duplicating project: ' + data.error);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

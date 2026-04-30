@@ -1,34 +1,29 @@
-# PDF to ePub Converter
+# PDF to ePub Converter (Web Version)
 
-A command-line interface (CLI) Python tool to convert PDF ebooks to ePub files. This tool supports extracting both text and embedded images from the PDF, and it features Optical Character Recognition (OCR) fallback for scanned pages or image-heavy pages, using Typhoon OCR.
+A web-based tool to convert PDF ebooks to ePub files. This tool features a web interface to preview PDFs, select areas to skip or keep as images, configure page settings, and perform Optical Character Recognition (OCR) using Typhoon OCR.
 
-## Features
-- Converts PDF files directly to ePub.
-- Extracts text natively from the PDF document.
-- Extracts and embeds images correctly inside the generated ePub file.
-- Built-in OCR support using Typhoon OCR for scanned pages (excellent Thai support).
-- Progress bar support for large files.
-- Command-line interface with customizable settings.
+## Features (In Progress)
+- Web interface for PDF upload and project management.
+- (Coming Soon) Interactive PDF viewer to select skipping areas (e.g., page numbers).
+- (Coming Soon) Page size optimization settings.
+- (Coming Soon) Mark pages as covers or full-page images.
+- (Coming Soon) Select areas within a page to embed as images in the ePub.
+- (Coming Soon) Real-time OCR progress reporting via WebSockets.
+- (Coming Soon) WYSIWYG editor for post-OCR corrections and styling.
 
 ## Installation
 
-See `MANUAL.md` for a detailed guide on how to set up the environment and prerequisites for this project.
+See `MANUAL.md` for a detailed guide on how to set up the environment.
 
 ## Quick Start
 ```bash
-# Set your API key in environment or pass via -k
+# Set your API key
 export TYPHOON_API_KEY="your-api-key"
-python epub_converter.py input_book.pdf
-```
-This will generate `input_book.epub` in the same directory using Typhoon OCR as fallback.
 
-```bash
-python epub_converter.py input_book.pdf -o output_book.epub -k "your-api-key"
+# Run the web server
+python app.py
 ```
-This specifies the output file name and explicitly provides the API key.
-
-## Requirements
-Check `requirements.txt` for Python dependencies. You need an active internet connection and a valid API key for Typhoon API.
+Then, open your browser and go to `http://localhost:5000`
 
 ## License
 MIT License

@@ -3,3 +3,7 @@ Pillow
 EbookLib
 tqdm
 requests
+Flask
+Flask-SocketIO
+python-socketio
+eventlet

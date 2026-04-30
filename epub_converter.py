@@ -1,8 +1,8 @@
 import argparse
 import os
 import io
-import base64
 import time
+import json
 import requests
 from collections import deque
 from ebooklib import epub
@@ -10,7 +10,7 @@ from PIL import Image
 import fitz  # PyMuPDF
 from tqdm import tqdm
 
-TYPHOON_API_URL = "https://api.scb10x.com/typhoon/v1/chat/completions"
+TYPHOON_API_URL = "https://api.opentyphoon.ai/v1/ocr"
 
 class RateLimiter:
     def __init__(self, max_calls_sec, max_calls_min):
@@ -40,8 +40,6 @@ class RateLimiter:
             time.sleep(sleep_time)
             # Update now after sleeping
             now = time.time()
-            # It's possible we need to clean up again after sleeping, 
-            # but appending the new 'now' is generally sufficient for basic limiting
             
         self.calls_sec.append(now)
         self.calls_min.append(now)
@@ -51,7 +49,7 @@ ocr_rate_limiter = RateLimiter(max_calls_sec=5, max_calls_min=200)
 
 def perform_ocr(image_bytes, api_key):
     """
-    Performs OCR on a given image bytes using Typhoon OCR.
+    Performs OCR on a given image bytes using Typhoon OCR endpoint.
     Respects rate limits.
     """
     if not api_key:
@@ -59,47 +57,48 @@ def perform_ocr(image_bytes, api_key):
         return ""
 
     try:
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-        
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+        # Pass image bytes directly without saving to disk
+        files = {'file': ('image.jpg', image_bytes, 'image/jpeg')}
+        data = {
+            'model': 'typhoon-ocr',
+            'task_type': 'default',
+            'max_tokens': '16384',
+            'temperature': '0.1',
+            'top_p': '0.6',
+            'repetition_penalty': '1.2'
         }
-        
-        payload = {
-            "model": "typhoon-v1.5-vision-preview", # Check for latest version on SCB10X portal
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Extract all the text from this image. Only return the extracted text, nothing else."
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            "max_tokens": 1024,
-            "temperature": 0.0
+
+        headers = {
+            'Authorization': f'Bearer {api_key}'
         }
         
         # Enforce rate limits before making the request
         ocr_rate_limiter.wait()
         
-        response = requests.post(TYPHOON_API_URL, headers=headers, json=payload)
-        response.raise_for_status()
+        response = requests.post(TYPHOON_API_URL, files=files, data=data, headers=headers)
         
-        response_json = response.json()
-        if "choices" in response_json and len(response_json["choices"]) > 0:
-            return response_json["choices"][0]["message"]["content"]
+        if response.status_code == 200:
+            result = response.json()
+
+            # Extract text from successful results
+            extracted_texts = []
+            for page_result in result.get('results', []):
+                if page_result.get('success') and page_result.get('message'):
+                    content = page_result['message']['choices'][0]['message']['content']
+                    try:
+                        # Try to parse as JSON if it's structured output
+                        parsed_content = json.loads(content)
+                        text = parsed_content.get('natural_text', content)
+                    except json.JSONDecodeError:
+                        text = content
+                    extracted_texts.append(text)
+                elif not page_result.get('success'):
+                    print(f"Error processing {page_result.get('filename', 'unknown')}: {page_result.get('error', 'Unknown error')}")
+
+            return '\n'.join(extracted_texts)
         else:
-            print("Warning: Unexpected response format from Typhoon API.")
+            print(f"Error during Typhoon OCR: {response.status_code}")
+            print(response.text)
             return ""
             
     except requests.exceptions.RequestException as e:
