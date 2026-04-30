@@ -1,5 +1,7 @@
 # pycharm project preferences
 .idea/
+data/
+projects
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
