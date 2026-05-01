@@ -18,8 +18,10 @@ from epub_converter import convert_project
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here'  # Change this in production
 app.config['UPLOAD_FOLDER'] = 'projects'
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB limit
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB limit to handle large PDFs
 
+# Initialize SocketIO without passing async_mode yet, 
+# run.py will handle the eventlet monkey patching and server start
 socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 
 # Ensure the upload folder exists
