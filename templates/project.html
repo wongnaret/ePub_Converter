@@ -113,6 +113,8 @@
         #reset-btn:hover { background: #c82333; }
 
         .api-warning { background: #dc3545; color: white; padding: 10px; text-align: center; font-weight: bold; }
+
+        .shortcut-hint { color: #6c757d; font-size: 0.8em; float: right; }
     </style>
 </head>
 <body>
@@ -158,25 +160,25 @@
             <h3>Drawing Tools</h3>
             <p style="font-size: 0.9em; color: #666;">Draw boxes to specify how the area should be processed.</p>
 
-            <button class="tool-btn active" id="tool-select">Select / Move</button>
-            <button class="tool-btn" id="tool-draw-skip" style="border-color: #dc3545; color: #dc3545;">Draw Skip Area (Red, Current Page)</button>
-            <button class="tool-btn" id="tool-draw-global-skip" style="border-color: #dc3545; color: #dc3545; border-style: dashed;">Draw Skip Area (Red, All Pages)</button>
-            <button class="tool-btn" id="tool-draw-image" style="border-color: #28a745; color: #28a745;">Draw Image Area (Green, Current Page)</button>
-            <button class="tool-btn" id="tool-draw-chapter" style="border-color: #17a2b8; color: #17a2b8;">Mark Chapter Start (Blue, Current Page)</button>
-            <button class="tool-btn danger" id="delete-selected-btn" style="margin-top: 20px;">Delete Selected Box</button>
+            <button class="tool-btn active" id="tool-select">Select / Move <span class="shortcut-hint">(S)</span></button>
+            <button class="tool-btn" id="tool-draw-skip" style="border-color: #dc3545; color: #dc3545;">Draw Skip Area <span class="shortcut-hint">(R)</span></button>
+            <button class="tool-btn" id="tool-draw-global-skip" style="border-color: #dc3545; color: #dc3545; border-style: dashed;">Draw Global Skip <span class="shortcut-hint">(G)</span></button>
+            <button class="tool-btn" id="tool-draw-image" style="border-color: #28a745; color: #28a745;">Draw Image Area <span class="shortcut-hint">(I)</span></button>
+            <button class="tool-btn" id="tool-draw-chapter" style="border-color: #17a2b8; color: #17a2b8;">Mark Chapter Start <span class="shortcut-hint">(C)</span></button>
+            <button class="tool-btn danger" id="delete-selected-btn" style="margin-top: 20px;">Delete Selected Box <span class="shortcut-hint">(Del)</span></button>
 
             <hr>
 
-            <button class="primary-btn" id="save-btn" style="background: #007bff;">Save Project</button>
+            <button class="primary-btn" id="save-btn" style="background: #007bff;">Save Project <span class="shortcut-hint">(Ctrl+S)</span></button>
             <button class="secondary-btn" id="save-as-btn">Save As New Project...</button>
             <button class="primary-btn" id="start-ocr-btn" style="margin-top: 20px;">Start OCR Processing</button>
         </div>
 
         <div id="main-content">
             <div class="controls-top">
-                <button id="prev-page">Previous</button>
+                <button id="prev-page">Previous <span class="shortcut-hint">(←)</span></button>
                 <span>Page: <span id="page-num"></span> / <span id="page-count"></span></span>
-                <button id="next-page">Next</button>
+                <button id="next-page">Next <span class="shortcut-hint">(→)</span></button>
                 <span style="margin-left: 20px;">Zoom: </span>
                 <button id="zoom-out">-</button>
                 <span id="zoom-val">100%</span>
@@ -258,6 +260,8 @@
         const toolGlobalSkip = document.getElementById('tool-draw-global-skip');
         const toolImage = document.getElementById('tool-draw-image');
         const toolChapter = document.getElementById('tool-draw-chapter');
+        const deleteBtn = document.getElementById('delete-selected-btn');
+        const saveBtn = document.getElementById('save-btn');
 
         // Socket.IO and Status Elements
         const socket = io();
@@ -452,7 +456,7 @@
         // Modification events
         fCanvas.on('object:modified', function(e) { saveAllBoxData(); });
 
-        document.getElementById('delete-selected-btn').addEventListener('click', () => {
+        deleteBtn.addEventListener('click', () => {
             const activeObj = fCanvas.getActiveObject();
             if (activeObj) {
                 fCanvas.remove(activeObj);
@@ -704,7 +708,7 @@
         });
 
         // Save to backend
-        document.getElementById('save-btn').addEventListener('click', () => {
+        saveBtn.addEventListener('click', () => {
             saveAllBoxData(); // Ensure the very latest is saved
 
             projectSettings.page_size = document.getElementById('page-size').value;
@@ -814,6 +818,48 @@
                     alert("Failed to reset status: " + data.error);
                 }
             });
+        });
+
+        // Keyboard Shortcuts
+        window.addEventListener('keydown', function(e) {
+            // Don't trigger shortcuts if user is typing in an input field
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+                return;
+            }
+
+            switch(e.key.toLowerCase()) {
+                case 's':
+                    toolSelect.click();
+                    break;
+                case 'r':
+                    toolSkip.click();
+                    break;
+                case 'g':
+                    toolGlobalSkip.click();
+                    break;
+                case 'i':
+                    toolImage.click();
+                    break;
+                case 'c':
+                    toolChapter.click();
+                    break;
+                case 'delete':
+                case 'backspace':
+                    deleteBtn.click();
+                    break;
+                case 'arrowleft':
+                    onPrevPage();
+                    break;
+                case 'arrowright':
+                    onNextPage();
+                    break;
+            }
+
+            // Ctrl+S / Cmd+S for saving
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                e.preventDefault();
+                saveBtn.click();
+            }
         });
     </script>
 </body>
